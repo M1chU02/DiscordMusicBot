@@ -2,6 +2,12 @@ import discord
 from discord.ext import commands
 import yt_dlp
 import asyncio
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,10 +24,16 @@ class MusicBot(commands.Cog):
         self.current_song = None
         self.volume = 0.3
         self.now_playing_message = None
+        self.playlist_extractor_task = None
+
+        spotify_client_id = os.getenv('spotify_client_id')
+        spotify_client_secret = os.getenv('spotify_client_secret')
+
+        self.sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=spotify_client_id, client_secret=spotify_client_secret))
 
     @commands.command()
     async def play(self, ctx, *, search):
-        """Plays a song from text/url"""
+        """Plays a song or playlist from a text/url"""
         voice_channel = ctx.author.voice.channel if ctx.author.voice else None
         if not voice_channel:
             return await ctx.send("You're not in a voice channel")
@@ -32,22 +44,77 @@ class MusicBot(commands.Cog):
             await ctx.voice_client.move_to(voice_channel)
 
         async with ctx.typing():
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                try:
-                    info = ydl.extract_info(f"ytsearch:{search}", download=False)
-                    if 'entries' in info:
-                        info = info['entries'][0]
+            try:
+                if 'spotify.com/track' in search:
+                    track_info = self.sp.track(search)
+                    title = track_info['name']
+                    artist = track_info['artists'][0]['name']
+                    search_query = f"{title} {artist}"
+                    info = await self.yt_search(search_query)
                     url = info['url']
                     title = info['title']
                     self.queue.append((url, title))
                     await ctx.send(f'🎶 **Added to queue:** `{title}`')
-                except Exception as e:
-                    await ctx.send(f"Error occurred: {str(e)}")
-                    return
-        
+                elif 'spotify.com/playlist' in search:
+                    playlist_info = self.sp.playlist_tracks(search)
+                    await ctx.send(f'🎶 **Processing Spotify playlist...**')
+                    first = True
+                    for item in playlist_info['items']:
+                        track = item['track']
+                        title = track['name']
+                        artist = track['artists'][0]['name']
+                        search_query = f"{title} {artist}"
+                        info = await self.yt_search(search_query)
+                        url = info['url']
+                        self.queue.append((url, title))
+                        if first and not ctx.voice_client.is_playing():
+                            await self.play_next(ctx)
+                            first = False
+                    await ctx.send(f'🎶 **Added Spotify playlist to queue**')
+                else:
+                    with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                        if 'youtube.com/playlist' in search or '&list=' in search:
+                            info = ydl.extract_info(search, download=False)
+                            self.playlist_extractor_task = asyncio.create_task(self.process_playlist(ctx, info['entries']))
+                            await ctx.send(f'🎶 **Processing playlist...**')
+                        else:
+                            info = ydl.extract_info(f"ytsearch:{search}", download=False)
+                            if 'entries' in info:
+                                info = info['entries'][0]
+                            url = info['url']
+                            title = info['title']
+                            self.queue.append((url, title))
+                            await ctx.send(f'🎶 **Added to queue:** `{title}`')
+            except Exception as e:
+                await ctx.send(f"Error occurred: {str(e)}")
+                return
+
         if not ctx.voice_client.is_playing() and not self.current_song:
             await self.play_next(ctx)
 
+    async def yt_search(self, query):
+        """Searches YouTube for the query and returns the first result."""
+        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+            info = ydl.extract_info(f"ytsearch:{query}", download=False)
+            if 'entries' in info:
+                return info['entries'][0]
+
+    async def process_playlist(self, ctx, entries):
+        """Process each song in the playlist one by one."""
+        first = True
+        for entry in entries:
+            if not entry:
+                continue
+            try:
+                url = entry['url']
+                title = entry['title']
+                self.queue.append((url, title))
+                if first and not ctx.voice_client.is_playing():
+                    await self.play_next(ctx)
+                    first = False
+            except Exception as e:
+                await ctx.send(f"Skipping a song due to an error: {str(e)}")
+        
     async def play_next(self, ctx):
         if self.queue:
             url, title = self.queue.pop(0)
@@ -119,6 +186,8 @@ class MusicBot(commands.Cog):
         """Stops the bot and clears the queue."""
         if ctx.voice_client:
             self.queue.clear()
+            if self.playlist_extractor_task:
+                self.playlist_extractor_task.cancel()  # Stop playlist processing
             ctx.voice_client.stop()
             await ctx.voice_client.disconnect()
             await ctx.send('🛑 Stopped the music and left the voice channel.')
@@ -185,6 +254,6 @@ client = commands.Bot(command_prefix='!', intents=intents)
 
 async def main():
     await client.add_cog(MusicBot(client))
-    await client.start('TOKEN')
+    await client.start(os.getenv('discord_bot_token'))
 
 asyncio.run(main())
