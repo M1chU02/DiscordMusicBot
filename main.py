@@ -1,3 +1,8 @@
+spotify_client_id = '992e28526271428a8337692ef00dc6b4'
+spotify_client_secret = 'd2c62f43699c4135b21a6f550e23f77a'
+
+discord_bot_token = 'MTI3Mjc5NjA1MTY5ODQ4NzMzNw.GZLlPf.fc2FZICJQDJIeFx6K2mQuZbcdlxNrNzuLy_t4c'
+
 import discord
 from discord.ext import commands
 import yt_dlp
@@ -25,9 +30,6 @@ class MusicBot(commands.Cog):
         self.volume = 0.3
         self.now_playing_message = None
         self.playlist_extractor_task = None
-
-        spotify_client_id = os.getenv('spotify_client_id')
-        spotify_client_secret = os.getenv('spotify_client_secret')
 
         self.sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=spotify_client_id, client_secret=spotify_client_secret))
 
@@ -254,6 +256,6 @@ client = commands.Bot(command_prefix='!', intents=intents)
 
 async def main():
     await client.add_cog(MusicBot(client))
-    await client.start(os.getenv('discord_bot_token'))
+    await client.start(discord_bot_token)
 
 asyncio.run(main())
